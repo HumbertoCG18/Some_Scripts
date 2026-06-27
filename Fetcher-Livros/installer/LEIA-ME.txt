@@ -1,0 +1,24 @@
+Biblioteca Astral — Downloader
+==============================
+
+COMO INSTALAR
+1. Mantenha todos os arquivos desta pasta juntos.
+2. Dê dois cliques em "Instalar.bat".
+   (Se o Windows avisar "Windows protegeu o computador", clique em
+    "Mais informações" > "Executar assim mesmo". O aviso é normal para
+    programas sem assinatura paga; o app não faz nada no sistema.)
+3. Pronto: vai aparecer o atalho "Biblioteca Astral" na Área de Trabalho.
+
+COMO USAR
+- Abra pelo atalho.
+- Escolha a pasta onde salvar (padrão: Documentos\Biblioteca Astral).
+- (Opcional) filtre por tradição.
+- Para baixar tudo sem ficar de babá, marque "Modo noturno" e clique Iniciar.
+  Pode pausar, continuar ou cancelar a qualquer momento.
+
+COMO DESINSTALAR
+- Dê dois cliques em "Desinstalar.bat", ou use
+  "Adicionar ou remover programas" do Windows.
+- Os livros já baixados NÃO são apagados.
+
+Não precisa de Python nem de internet para instalar — só para baixar os livros.

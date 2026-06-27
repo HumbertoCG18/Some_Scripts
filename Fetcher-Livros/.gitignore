@@ -1,0 +1,12 @@
+downloads/
+catalog.json
+failed.json
+*.part
+__pycache__/
+
+# artefatos de build do executável
+build/
+dist/
+release/
+*.spec
+assets/book.png
