@@ -96,9 +96,11 @@ class App:
         self.btn_start = ttk.Button(btns, text="Iniciar", command=self._start)
         self.btn_pause = ttk.Button(btns, text="Pausar", command=self._toggle_pause)
         self.btn_cancel = ttk.Button(btns, text="Cancelar", command=self._cancel)
+        self.btn_repair = ttk.Button(btns, text="Corrigir extensões", command=self._repair)
         self.btn_start.pack(side="left", padx=4)
         self.btn_pause.pack(side="left", padx=4)
         self.btn_cancel.pack(side="left", padx=4)
+        self.btn_repair.pack(side="right", padx=4)
 
         # Barra de progresso
         self.progress = ttk.Progressbar(frm, mode="determinate")
@@ -121,18 +123,20 @@ class App:
 
     # --------------------------------------------------------------- estado
     def _set_state(self, state: str) -> None:
-        """state: loading | idle | running | paused | done"""
+        """state: loading | idle | running | paused | done | repairing"""
         cfg = {
-            "loading": (("disabled", "disabled", "disabled"), True),
-            "idle":    (("normal", "disabled", "disabled"), False),
-            "running": (("disabled", "normal", "normal"), False),
-            "paused":  (("disabled", "normal", "normal"), False),
-            "done":    (("normal", "disabled", "disabled"), False),
+            "loading":   (("disabled", "disabled", "disabled"), True),
+            "idle":      (("normal", "disabled", "disabled"), False),
+            "running":   (("disabled", "normal", "normal"), False),
+            "paused":    (("disabled", "normal", "normal"), False),
+            "done":      (("normal", "disabled", "disabled"), False),
+            "repairing": (("disabled", "disabled", "disabled"), True),
         }
         (s, p, c), combo_lock = cfg[state]
         self.btn_start["state"] = s
         self.btn_pause["state"] = p
         self.btn_cancel["state"] = c
+        self.btn_repair["state"] = "normal" if state in ("idle", "done") else "disabled"
         self.btn_pause["text"] = "Continuar" if state == "paused" else "Pausar"
         self.trad_combo["state"] = "disabled" if (combo_lock or state in ("running", "paused")) else "readonly"
         self.state = state
@@ -184,6 +188,24 @@ class App:
         if self.night_var.get() and self.delay_var.get() == 0.0:
             self.delay_var.set(1.0)
 
+    def _repair(self) -> None:
+        out = Path(self.out_var.get().strip() or str(fetcher.OUT_DIR_DEFAULT))
+        if not out.exists():
+            messagebox.showinfo("Corrigir extensões", "A pasta de destino ainda não existe.")
+            return
+        self._set_state("repairing")
+        self.status_var.set("Corrigindo extensões dos arquivos baixados...")
+        self._log(f"\n=== Corrigindo extensões em {out} ===")
+
+        def work():
+            try:
+                n = fetcher.repair_downloads(out, log=lambda m: self.events.put(("log", m)))
+                self.events.put(("repair_done", n))
+            except Exception as e:
+                self.events.put(("error", f"Falha no reparo: {e}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _start(self) -> None:
         if not self.books:
             messagebox.showwarning("Aguarde", "Catálogo ainda não carregado.")
@@ -201,14 +223,28 @@ class App:
         self.progress["value"] = 0
         workers = int(self.workers_var.get())
         delay = float(self.delay_var.get())
+        night = self.night_var.get()
+        cooldown = float(self.cooldown_var.get())
+        self.loop_mode = night
 
-        if self.night_var.get():
-            self.loop_mode = True
-            cooldown = float(self.cooldown_var.get())
+        if night:
             self._log(f"\n=== Modo noturno: {len(books)} livros -> {out} "
                       f"(workers={workers}, delay~{delay}s, cooldown={cooldown:.0f}min) ===")
+        else:
+            self._log(f"\n=== Iniciando: {len(books)} livros -> {out} "
+                      f"(workers={workers}, delay~{delay}s) ===")
 
-            def work():
+        def work():
+            # 1) Corrige extensões de downloads antigos (forçados em .pdf / sem extensão)
+            #    antes de baixar — assim eles não são re-baixados e ficam com o nome certo.
+            if out.exists():
+                self.events.put(("status", "Corrigindo extensões de downloads anteriores..."))
+                fetcher.repair_downloads(out, log=lambda m: self.events.put(("log", m)))
+            if self._cancel_event.is_set():
+                self.events.put(("loop_done", {"baixados": 0, "faltando": len(books), "permanentes": 0}))
+                return
+            # 2) Baixa
+            if night:
                 summary = fetcher.run_until_done(
                     books, out, workers=workers, delay=delay, cooldown_min=cooldown,
                     on_event=lambda e: self.events.put(("dl", e)),
@@ -217,18 +253,16 @@ class App:
                     register=lambda dl: setattr(self, "dl", dl),
                 )
                 self.events.put(("loop_done", summary))
+            else:
+                targets = fetcher.build_targets(books, out)
+                dl = fetcher.Downloader(
+                    books, targets, workers=workers, delay=delay,
+                    on_event=lambda e: self.events.put(("dl", e)),
+                )
+                self.dl = dl
+                dl.run()  # bloqueia nesta thread; emite 'finished' -> vira "done"
 
-            threading.Thread(target=work, daemon=True).start()
-        else:
-            self.loop_mode = False
-            targets = fetcher.build_targets(books, out)
-            self._log(f"\n=== Iniciando: {len(books)} livros -> {out} "
-                      f"(workers={workers}, delay~{delay}s) ===")
-            self.dl = fetcher.Downloader(
-                books, targets, workers=workers, delay=delay,
-                on_event=lambda e: self.events.put(("dl", e)),
-            )
-            self.dl.start()
+        threading.Thread(target=work, daemon=True).start()
         self._set_state("running")
 
     def _toggle_pause(self) -> None:
@@ -273,6 +307,9 @@ class App:
                     self._on_dl_event(payload)
                 elif kind == "loop_done":
                     self._on_loop_done(payload)
+                elif kind == "repair_done":
+                    self.status_var.set(f"Reparo concluído: {payload} arquivo(s) corrigido(s).")
+                    self._set_state("done")
         except queue.Empty:
             pass
         self.root.after(100, self._drain)

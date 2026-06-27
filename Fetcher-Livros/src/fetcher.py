@@ -30,7 +30,10 @@ Uso CLI:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
+import mimetypes
+import os
 import random
 import re
 import sys
@@ -144,13 +147,50 @@ def tradition_counts(books: list[dict]) -> dict[str, int]:
 # --------------------------------------------------------------------------- #
 # Caminhos de saída
 # --------------------------------------------------------------------------- #
+# Os arquivos NÃO são todos PDF: há jpg, png, doc(x), txt, etc. Nunca force .pdf.
+KNOWN_EXTS = {
+    ".pdf", ".epub", ".mobi", ".djvu",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff",
+    ".doc", ".docx", ".odt", ".rtf", ".txt", ".md",
+    ".ppt", ".pptx", ".xls", ".xlsx", ".csv",
+    ".zip", ".rar", ".7z",
+}
+
+
+_EXT_EQUIV = {".jpeg": ".jpg", ".tif": ".tiff"}
+
+
+def _norm_ext(e: str) -> str:
+    return _EXT_EQUIV.get(e.lower(), e.lower())
+
+
+def _split_known_ext(name: str) -> tuple[str, str]:
+    """(stem, ext) se a extensão for conhecida; senão (name, '')."""
+    stem, ext = os.path.splitext(name)
+    if ext.lower() in KNOWN_EXTS:
+        return stem, ext
+    return name, ""
+
+
 def clean(part: str, maxlen: int = 120) -> str:
+    """Sanitiza um componente de pasta (sem preservar extensão)."""
     part = ZWJ.sub("", part)
     part = ILLEGAL.sub("_", part)
     part = part.strip().strip(".").strip()
     if len(part) > maxlen:
         part = part[:maxlen].rstrip()
     return part or "_"
+
+
+def clean_filename(name: str, maxlen: int = 120) -> str:
+    """Sanitiza um nome de arquivo preservando a extensão real (se conhecida)."""
+    name = ZWJ.sub("", name)
+    name = ILLEGAL.sub("_", name).strip()
+    stem, ext = _split_known_ext(name)
+    stem = stem.strip().strip(".").strip()
+    if len(stem) + len(ext) > maxlen:
+        stem = stem[: max(1, maxlen - len(ext))].rstrip()
+    return (stem + ext) if stem else ("_" + ext if ext else "_")
 
 
 def build_targets(books: list[dict], out_dir: Path) -> dict[str, Path]:
@@ -167,15 +207,14 @@ def build_targets(books: list[dict], out_dir: Path) -> dict[str, Path]:
         base: dict[str, str] = {}
         counts: dict[str, int] = {}
         for b in group:
-            name = clean(b["name"])
-            if not name.lower().endswith(".pdf"):
-                name += ".pdf"
+            name = clean_filename(b["name"])  # mantém a extensão real
             base[b["id"]] = name
             counts[name] = counts.get(name, 0) + 1
         for b in group:
             name = base[b["id"]]
-            if counts[name] > 1:  # nomes iguais na mesma pasta -> sufixo do id
-                name = f"{name[:-4]}-{b['id'][:8]}.pdf"
+            if counts[name] > 1:  # nomes iguais na mesma pasta -> sufixo do id antes da extensão
+                stem, ext = _split_known_ext(name)
+                name = f"{stem}-{b['id'][:8]}{ext}"
             targets[b["id"]] = folder / name
     return targets
 
@@ -191,6 +230,55 @@ class QuotaError(RuntimeError):
     """Limite temporário de quota do Drive — não adianta repetir agora."""
 
 
+def _magic_ext(head: bytes) -> str:
+    """Detecta a extensão pelos primeiros bytes do arquivo. '' se desconhecido."""
+    if head[:4] == b"%PDF":
+        return ".pdf"
+    if head[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head[:5] == b"{\\rtf":
+        return ".rtf"
+    if head[:4] == b"PK\x03\x04":
+        return ".zip"  # docx/xlsx/pptx/epub também são zip — o nome do Drive desambigua
+    if head[:5] == b"%!PS-":
+        return ".ps"
+    return ""
+
+
+def _sniff_ext(content_disposition: str | None, content_type: str | None, head: bytes) -> str:
+    """Decide a extensão: nome do Content-Disposition > magic bytes > Content-Type > .bin."""
+    if content_disposition:
+        m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", content_disposition)
+        if m:
+            ext = os.path.splitext(m.group(1).strip())[1].lower()
+            if ext in KNOWN_EXTS:
+                return ext
+    m = _magic_ext(head)
+    if m:
+        return m
+    if content_type:
+        guess = mimetypes.guess_extension(content_type.split(";")[0].strip().lower())
+        if guess:
+            return {".jpe": ".jpg", ".htm": ".html"}.get(guess, guess)
+    return ".bin"
+
+
+def _target_done(dest: Path) -> bool:
+    """True se o arquivo já existe. Para nomes sem extensão, aceita qualquer extensão detectada."""
+    if _split_known_ext(dest.name)[1]:
+        return dest.exists() and dest.stat().st_size > 0
+    for f in glob.glob(glob.escape(str(dest)) + ".*"):
+        if os.path.isfile(f) and os.path.getsize(f) > 0:
+            return True
+    return False
+
+
 def _session() -> requests.Session:
     """Uma Session por thread (pool de conexões, cookies do fluxo de confirmação)."""
     s = getattr(_local, "s", None)
@@ -201,11 +289,12 @@ def _session() -> requests.Session:
     return s
 
 
-def _drive_download(file_id: str, tmp: Path, should_stop: Callable[[], bool] | None = None) -> bool:
+def _drive_download(file_id: str, tmp: Path,
+                    should_stop: Callable[[], bool] | None = None) -> tuple[bool, str, str]:
     """
     Baixa um arquivo público do Drive para `tmp`.
     Lida com a página de confirmação de arquivos grandes (>~100 MB).
-    Retorna True em sucesso; False se cancelado. Lança em erro real.
+    Retorna (ok, content_disposition, content_type). ok=False se cancelado; lança em erro real.
     """
     s = _session()
     params = {"id": file_id, "export": "download"}
@@ -227,13 +316,15 @@ def _drive_download(file_id: str, tmp: Path, should_stop: Callable[[], bool] | N
         else:
             raise RuntimeError("página HTML inesperada (arquivo sem permissão pública ou removido?)")
 
+    cd = r.headers.get("Content-Disposition", "")
+    ct = r.headers.get("Content-Type", "")
     with open(tmp, "wb") as f:
         for chunk in r.iter_content(chunk_size=1 << 16):
             if should_stop and should_stop():
-                return False
+                return (False, cd, ct)
             if chunk:
                 f.write(chunk)
-    return True
+    return (True, cd, ct)
 
 
 def download_one(book: dict, dest: Path, retries: int = 3,
@@ -247,11 +338,12 @@ def download_one(book: dict, dest: Path, retries: int = 3,
       retry -> falha transitória (quota do Drive, rede): vale tentar mais tarde
       fail  -> falha permanente (sem permissão / removido / vazio)
     """
-    if dest.exists() and dest.stat().st_size > 0:
+    if _target_done(dest):
         return (book["id"], "skip", str(dest))
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp = dest.parent / (dest.name + ".part")
+    needs_ext = not _split_known_ext(dest.name)[1]  # nome sem extensão conhecida
 
     last = ""
     kind = "fail"
@@ -261,14 +353,19 @@ def download_one(book: dict, dest: Path, retries: int = 3,
         try:
             if tmp.exists():
                 tmp.unlink()
-            ok = _drive_download(book["id"], tmp, should_stop)
+            ok, cd, ct = _drive_download(book["id"], tmp, should_stop)
             if not ok:  # cancelado no meio
                 if tmp.exists():
                     tmp.unlink()
                 return (book["id"], "cancel", "")
             if tmp.stat().st_size > 0:
-                tmp.replace(dest)
-                return (book["id"], "ok", str(dest))
+                final = dest
+                if needs_ext:  # descobre a extensão real pelo header/magic bytes
+                    with open(tmp, "rb") as fh:
+                        head = fh.read(16)
+                    final = dest.parent / (dest.name + _sniff_ext(cd, ct, head))
+                tmp.replace(final)
+                return (book["id"], "ok", str(final))
             last, kind = "arquivo vazio", "fail"
             break
         except QuotaError as e:  # quota: não recupera em segundos -> deixa pro loop
@@ -374,7 +471,7 @@ class Downloader:
         if self._cancel.is_set():
             return None
         dest = self.targets[book["id"]]
-        already = dest.exists() and dest.stat().st_size > 0
+        already = _target_done(dest)
         if self.delay > 0 and not already:  # espaça só downloads reais (não skips)
             self._interruptible_sleep(random.uniform(self.delay * 0.5, self.delay * 1.5))
             if self._cancel.is_set():
@@ -432,6 +529,64 @@ class Downloader:
 
 
 # --------------------------------------------------------------------------- #
+# Reparo: corrige arquivos já baixados com extensão errada (ex.: ".jpg.pdf")
+# --------------------------------------------------------------------------- #
+_ZIP_OK = {".zip", ".docx", ".xlsx", ".pptx", ".epub", ".odt"}
+
+
+def repair_downloads(out_dir: Path, log: Callable[[str], None] = print) -> int:
+    """
+    Varre a pasta de downloads e renomeia arquivos cujo conteúdo (magic bytes)
+    não bate com a extensão. Corrige casos como 'imagem.jpg.pdf' -> 'imagem.jpg'.
+    Não toca em txt/doc antigos/csv (sem assinatura detectável).
+    """
+    root = Path(out_dir)
+    if not root.exists():
+        log(f"Pasta não encontrada: {root}")
+        return 0
+    fixed = checked = 0
+    for f in root.rglob("*"):
+        if not f.is_file() or f.suffix.lower() == ".part":
+            continue
+        checked += 1
+        try:
+            with open(f, "rb") as fh:
+                head = fh.read(16)
+        except Exception:
+            continue
+        real = _magic_ext(head)
+        if not real:
+            continue  # tipo indetectável -> não mexe
+        cur = f.suffix.lower()
+        if real == ".zip" and cur in _ZIP_OK:
+            continue  # docx/epub/etc. são zip e já estão certos
+        if _norm_ext(cur) == _norm_ext(real):
+            continue  # já correto
+        stem = f.stem
+        sext = _split_known_ext(stem)[1].lower()
+        if _norm_ext(sext) == _norm_ext(real) or (real == ".zip" and sext in _ZIP_OK):
+            newname = stem                       # imagem.jpg.pdf -> imagem.jpg
+        else:
+            newname = (f.stem + real) if cur else (f.name + real)  # imagem.pdf(jpg) -> imagem.jpg
+        target = f.with_name(newname)
+        if target == f:
+            continue
+        bstem, bext = _split_known_ext(target.name)
+        i = 1
+        while target.exists():
+            target = f.with_name(f"{bstem}-{i}{bext}")
+            i += 1
+        try:
+            f.rename(target)
+            fixed += 1
+            log(f"corrigido: {f.name} -> {target.name}")
+        except Exception as e:
+            log(f"falha ao renomear {f.name}: {e}")
+    log(f"Reparo concluído: {fixed} corrigidos de {checked} arquivos.")
+    return fixed
+
+
+# --------------------------------------------------------------------------- #
 # Loop "até concluir" — pensado para rodar a noite inteira sem bater quota
 # --------------------------------------------------------------------------- #
 def run_until_done(
@@ -462,8 +617,7 @@ def run_until_done(
     permanent: set[str] = set()
 
     def still_missing(b: dict) -> bool:
-        p = targets[b["id"]]
-        return not (p.exists() and p.stat().st_size > 0)
+        return not _target_done(targets[b["id"]])
 
     for rnd in range(1, max_rounds + 1):
         if cancel_event and cancel_event.is_set():
@@ -547,7 +701,13 @@ def main() -> int:
     ap.add_argument("--refresh-catalog", action="store_true", help="rebaixa o catálogo")
     ap.add_argument("--retry-failed", action="store_true", help="só reprocessa failed.json")
     ap.add_argument("--list-traditions", action="store_true", help="lista tradições e sai")
+    ap.add_argument("--repair", action="store_true",
+                    help="corrige extensões erradas de arquivos já baixados e sai")
     args = ap.parse_args()
+
+    if args.repair:
+        repair_downloads(args.out)
+        return 0
 
     books = load_catalog(args.refresh_catalog)
 
@@ -561,6 +721,10 @@ def main() -> int:
     if not books:
         print("Nada para baixar.")
         return 0
+
+    # Auto-reparo: corrige extensões de downloads antigos antes de (re)baixar.
+    if args.out.exists():
+        repair_downloads(args.out, log=lambda m: None)
 
     def on_event(e: dict) -> None:
         if e["type"] == "progress":
