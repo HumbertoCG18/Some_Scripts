@@ -1,4 +1,4 @@
-# Reconstrói o executável e monta a pasta release/ pronta para distribuir.
+﻿# Reconstrói o executável e monta a pasta release/ pronta para distribuir.
 # Requisitos (só para quem compila): python, pip install pyinstaller pillow requests
 # Rode da raiz ou de qualquer lugar: .\scripts\build.ps1
 param([switch]$SkipIcon)

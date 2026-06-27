@@ -8,24 +8,32 @@ Tem **GUI** (`src/gui.py`) e **CLI** (`src/fetcher.py`).
 ## Estrutura
 
 ```
-Biblioteca Astral.exe   executável pronto (versionado na raiz)
-Instalar.bat            instala + cria atalho na Área de Trabalho
-Desinstalar.bat         remove o programa (mantém os livros baixados)
-src/                    fetcher.py (núcleo + CLI), gui.py (Tkinter), main.py (instância única)
-assets/                 book.ico (ícone, usado só na compilação)
-scripts/                make_icon.py (gera o ícone), build.ps1 (recompila o .exe)
+Instalar.bat     instala Python+deps se faltar, compila o exe e cria o atalho
+Desinstalar.bat  remove o programa e os artefatos (mantém os livros baixados)
+src/             fetcher.py (núcleo + CLI), gui.py (Tkinter), main.py (instância única)
+assets/          book.ico (ícone)
+scripts/         build.ps1 (compila o exe), make_icon.py (gera o ícone)
 ```
 
-## Instalação para quem não tem Python (usuário final)
+O `.exe` **não** é versionado — ele é gerado pelo `Instalar.bat` na hora da instalação.
 
-1. Baixe a pasta do projeto (ou só estes 3: `Biblioteca Astral.exe`,
-   `Instalar.bat`, `Desinstalar.bat` — mantenha-os juntos).
-2. Dê dois cliques em **`Instalar.bat`**.
-   - Se aparecer "Windows protegeu o computador": **Mais informações → Executar assim mesmo**
-     (aviso normal para apps sem assinatura paga).
-3. Pronto: atalho **Biblioteca Astral** na Área de Trabalho. Não precisa de Python.
+## Instalação (usuário final)
 
-Para remover: dois cliques em **`Desinstalar.bat`** (ou em "Adicionar ou remover programas").
+1. Baixe **a pasta inteira do projeto** (precisa do código-fonte para compilar) e
+   mantenha tudo junto.
+2. Dê dois cliques em **`Instalar.bat`**. Ele, automaticamente:
+   - instala o **Python** via `winget` se não houver (Windows 10/11);
+   - instala as dependências (`requirements.txt` + PyInstaller);
+   - **compila** o `Biblioteca Astral.exe`;
+   - instala em `%LOCALAPPDATA%\Programs\Biblioteca Astral` e cria o atalho na
+     **Área de Trabalho**;
+   - limpa os arquivos temporários de compilação.
+   - Se o SmartScreen avisar, é só seguir — o app não mexe no sistema.
+3. Pronto: abra pelo atalho **Biblioteca Astral**.
+
+A primeira instalação demora alguns minutos (baixa Python/deps e compila).
+
+Para remover: dois cliques em **`Desinstalar.bat`** (ou "Adicionar ou remover programas").
 Os livros já baixados (Documentos\Biblioteca Astral) **não** são apagados.
 
 ## Como funciona
@@ -110,15 +118,16 @@ python src/fetcher.py --out D:/Livros      # pasta de saída custom
   "o programa já está aberto" (mutex nomeado do Windows).
 - **Arquivos grandes** (>100 MB): a página de confirmação de "vírus" do Drive é tratada.
 
-## Recompilar o executável (.exe)
+## Compilar o exe manualmente (opcional)
+
+O `Instalar.bat` já faz isso sozinho. Para compilar à mão:
 
 ```powershell
 pip install pyinstaller pillow requests
-.\scripts\build.ps1
+.\scripts\build.ps1            # ou -SkipIcon se assets\book.ico já existe
 ```
 
-Regera `Biblioteca Astral.exe` na raiz (com o ícone). `Instalar.bat` e `Desinstalar.bat`
-não mudam — continuam funcionando ao lado do exe.
+Gera `Biblioteca Astral.exe` na raiz.
 
 ## Arquivos
 

@@ -4,8 +4,9 @@ failed.json
 *.part
 __pycache__/
 
-# artefatos de build do executável (o exe final fica versionado na raiz)
+# artefatos de build do executável (gerado pelo Instalar.bat, não versionado)
 build/
 dist/
 *.spec
 assets/book.png
+Biblioteca Astral.exe
