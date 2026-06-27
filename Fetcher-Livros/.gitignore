@@ -4,9 +4,8 @@ failed.json
 *.part
 __pycache__/
 
-# artefatos de build do executável
+# artefatos de build do executável (o exe final fica versionado na raiz)
 build/
 dist/
-release/
 *.spec
 assets/book.png

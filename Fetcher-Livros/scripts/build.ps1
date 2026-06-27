@@ -12,13 +12,10 @@ python -m PyInstaller --noconfirm --onefile --windowed `
     --icon assets\book.ico --name "Biblioteca Astral" `
     --paths src --add-data "assets\book.ico;." src\main.py
 
-$rel = Join-Path $root "release"
-Remove-Item $rel -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $rel | Out-Null
-Copy-Item ".\dist\Biblioteca Astral.exe" $rel
-Copy-Item ".\assets\book.ico" $rel
-Copy-Item ".\installer\*" $rel -Force
+# Coloca o exe na raiz, ao lado de Instalar.bat / Desinstalar.bat (versionado).
+Copy-Item ".\dist\Biblioteca Astral.exe" $root -Force
 
 Write-Host ""
-Write-Host "Pronto. Distribua a pasta: $rel" -ForegroundColor Green
+Write-Host "Pronto. Exe atualizado na raiz do repositório." -ForegroundColor Green
+Write-Host "Distribua: 'Biblioteca Astral.exe' + 'Instalar.bat' + 'Desinstalar.bat'."
 Write-Host "O usuário final dá dois cliques em 'Instalar.bat'."

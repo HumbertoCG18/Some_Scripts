@@ -8,12 +8,25 @@ Tem **GUI** (`src/gui.py`) e **CLI** (`src/fetcher.py`).
 ## Estrutura
 
 ```
-src/         fetcher.py (núcleo + CLI), gui.py (Tkinter), main.py (entrada, instância única)
-assets/      book.ico (ícone)
-scripts/     make_icon.py (gera o ícone), build.ps1 (gera o .exe + release/)
-installer/   Instalar.bat / Desinstalar.bat / *.ps1 / LEIA-ME.txt
-release/     pasta pronta para distribuir (gerada por build.ps1)
+Biblioteca Astral.exe   executável pronto (versionado na raiz)
+Instalar.bat            instala + cria atalho na Área de Trabalho
+Desinstalar.bat         remove o programa (mantém os livros baixados)
+src/                    fetcher.py (núcleo + CLI), gui.py (Tkinter), main.py (instância única)
+assets/                 book.ico (ícone, usado só na compilação)
+scripts/                make_icon.py (gera o ícone), build.ps1 (recompila o .exe)
 ```
+
+## Instalação para quem não tem Python (usuário final)
+
+1. Baixe a pasta do projeto (ou só estes 3: `Biblioteca Astral.exe`,
+   `Instalar.bat`, `Desinstalar.bat` — mantenha-os juntos).
+2. Dê dois cliques em **`Instalar.bat`**.
+   - Se aparecer "Windows protegeu o computador": **Mais informações → Executar assim mesmo**
+     (aviso normal para apps sem assinatura paga).
+3. Pronto: atalho **Biblioteca Astral** na Área de Trabalho. Não precisa de Python.
+
+Para remover: dois cliques em **`Desinstalar.bat`** (ou em "Adicionar ou remover programas").
+Os livros já baixados (Documentos\Biblioteca Astral) **não** são apagados.
 
 ## Como funciona
 
@@ -97,15 +110,15 @@ python src/fetcher.py --out D:/Livros      # pasta de saída custom
   "o programa já está aberto" (mutex nomeado do Windows).
 - **Arquivos grandes** (>100 MB): a página de confirmação de "vírus" do Drive é tratada.
 
-## Gerar o executável (.exe)
+## Recompilar o executável (.exe)
 
 ```powershell
 pip install pyinstaller pillow requests
 .\scripts\build.ps1
 ```
 
-Produz `release/` (exe + instalador). O usuário final dá 2 cliques em `Instalar.bat`
-— cria atalho na Área de Trabalho, sem precisar de Python.
+Regera `Biblioteca Astral.exe` na raiz (com o ícone). `Instalar.bat` e `Desinstalar.bat`
+não mudam — continuam funcionando ao lado do exe.
 
 ## Arquivos
 
